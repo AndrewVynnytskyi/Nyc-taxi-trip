@@ -53,12 +53,9 @@ repos:
           - pandas-stubs
           - omegaconf
 
-  # Notebooks are production artifacts too: strip outputs and lint the code cells.
-  - repo: https://github.com/kynan/nbstripout
-    rev: 0.7.1
-    hooks:
-      - id: nbstripout
-
+  # Notebooks are production artifacts too, and their executed outputs -- the
+  # figures and metric tables -- are part of the deliverable, so outputs are
+  # deliberately NOT stripped. Code cells are still linted like any module.
   - repo: https://github.com/nbQA-dev/nbQA
     rev: 1.8.5
     hooks:

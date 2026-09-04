@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import random
+import sys
 from pathlib import Path
-from typing import Final
+from typing import Final, TextIO
 
 import numpy as np
 import torch
@@ -23,7 +24,11 @@ _LOG_FORMAT: Final[str] = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)
 _DATE_FORMAT: Final[str] = "%Y-%m-%d %H:%M:%S"
 
 
-def setup_logging(level: int | str = logging.INFO, log_file: Path | str | None = None) -> None:
+def setup_logging(
+    level: int | str = logging.INFO,
+    log_file: Path | str | None = None,
+    stream: TextIO | None = None,
+) -> None:
     """Configure the root logger once, for both scripts and notebooks.
 
     Existing handlers are replaced so that repeated calls (common when a
@@ -33,11 +38,15 @@ def setup_logging(level: int | str = logging.INFO, log_file: Path | str | None =
         level: Logging level as an ``int`` or a name such as ``"DEBUG"``.
         log_file: Optional file to mirror the log stream into. Parent
             directories are created automatically.
+        stream: Stream to log to. Defaults to :data:`sys.stdout` rather than
+            :data:`sys.stderr`: informational logs are not errors, and Jupyter
+            renders anything on stderr with an error-red background, which makes
+            a successful run look like a failed one.
 
     Raises:
         OSError: If ``log_file`` is given and its directory cannot be created.
     """
-    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    handlers: list[logging.Handler] = [logging.StreamHandler(stream or sys.stdout)]
     if log_file is not None:
         path = Path(log_file).expanduser().resolve()
         path.parent.mkdir(parents=True, exist_ok=True)

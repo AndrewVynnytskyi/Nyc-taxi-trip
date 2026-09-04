@@ -166,6 +166,9 @@ training:
   monitor_metric: val_rmse
   monitor_mode: min         # min | max
   log_every_n_steps: 50
+  # auto | on | off. `auto` shows tqdm bars only on an interactive terminal,
+  # so batch-level bar spam never gets baked into an executed notebook.
+  progress_bar: auto
 
 optimizer:
   name: adamw               # adam | adamw | sgd

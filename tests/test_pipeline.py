@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,7 @@ from nyc_taxi.config import ConfigError, load_config
 from nyc_taxi.data import DataError, TaxiDataModule
 from nyc_taxi.etl import ETLError, TaxiETLPipeline
 from nyc_taxi.model import ModelError, build_model
+from nyc_taxi.train import Trainer
 
 
 @pytest.fixture(scope="session")
@@ -152,3 +154,34 @@ def test_derived_paths_are_absolute_regardless_of_cwd(
             value = value[part]
         assert Path(str(value)).is_absolute(), f"{key} is relative: {value}"
         assert "notebooks" not in str(value)
+
+
+def test_logging_defaults_to_stdout_not_stderr() -> None:
+    """Logs must not land on stderr.
+
+    Regression test: Jupyter renders any stderr stream on an error-red
+    background, so INFO logs made a successful notebook run look like a failed
+    one. Informational logs belong on stdout.
+    """
+    import logging
+
+    from nyc_taxi.utils import setup_logging
+
+    setup_logging()
+    streams = [
+        h.stream for h in logging.getLogger().handlers if isinstance(h, logging.StreamHandler)
+    ]
+    assert streams, "expected at least one stream handler"
+    assert all(s is sys.stdout for s in streams), f"handler(s) not on stdout: {streams}"
+
+
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [("on", True), ("off", False)],
+)
+def test_progress_bar_setting_is_explicit(setting: str, expected: bool) -> None:
+    """`training.progress_bar` on/off override TTY detection."""
+    cfg = load_config(overrides=[f"training.progress_bar={setting}"])
+    trainer = Trainer.__new__(Trainer)
+    trainer.cfg = cfg
+    assert trainer._resolve_progress_bar() is expected

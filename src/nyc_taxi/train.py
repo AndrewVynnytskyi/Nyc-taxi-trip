@@ -160,6 +160,7 @@ class Trainer:
         self.global_step = 0
 
         self._unit = str(cfg.data.get("target_unit", "") or "")
+        self._show_progress = self._resolve_progress_bar()
         self._monitor = str(cfg.training.monitor_metric)
         self._mode = str(cfg.training.monitor_mode)
         self._best_score = math.inf if self._mode == "min" else -math.inf
@@ -397,6 +398,29 @@ class Trainer:
 
     # -- Epoch-level internals ----------------------------------------------
 
+    def _resolve_progress_bar(self) -> bool:
+        """Decide whether to draw tqdm progress bars.
+
+        Returns:
+            ``True`` when bars should be drawn.
+
+        Raises:
+            TrainingError: If ``training.progress_bar`` is not a known value.
+        """
+        setting = str(self.cfg.training.get("progress_bar", "auto")).strip().lower()
+        if setting in {"on", "true", "yes"}:
+            return True
+        if setting in {"off", "false", "no"}:
+            return False
+        if setting != "auto":
+            raise TrainingError(
+                f"Unsupported training.progress_bar {setting!r}; expected auto, on or off."
+            )
+        # `auto`: only on a real terminal. Under nbconvert or a redirected log
+        # every bar refresh is captured as a separate output, which buries the
+        # actual results in thousands of lines.
+        return bool(getattr(sys.stdout, "isatty", lambda: False)())
+
     def _train_epoch(self, loader: DataLoader[Batch]) -> float:
         """Run one optimisation pass over the training set.
 
@@ -423,6 +447,8 @@ class Trainer:
             desc=f"Epoch {self.current_epoch:03d} [train]",
             leave=False,
             unit="batch",
+            disable=not self._show_progress,
+            file=sys.stdout,
         )
         for step, (features, targets) in enumerate(progress, start=1):
             features = features.to(self.device, non_blocking=True)
@@ -486,6 +512,8 @@ class Trainer:
             desc=f"Epoch {self.current_epoch:03d} [{stage}]",
             leave=False,
             unit="batch",
+            disable=not self._show_progress,
+            file=sys.stdout,
         )
         for features, target in progress:
             features = features.to(self.device, non_blocking=True)
