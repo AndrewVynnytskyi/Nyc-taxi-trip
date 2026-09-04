@@ -13,10 +13,13 @@ Run as a console script::
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Sequence
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import pandas as pd
 from omegaconf import DictConfig
@@ -100,7 +103,7 @@ class TaxiETLPipeline:
         Raises:
             ETLError: If any stage fails.
         """
-        csv_path = self.resolve_source_path()
+        source_path = self.resolve_source_path()
         engine = engine if engine is not None else build_engine(self.cfg)
 
         raw_table = str(self.cfg.database.raw_table)
@@ -109,9 +112,9 @@ class TaxiETLPipeline:
         self.stats = ETLStats()
         self._recreate_tables(engine, (raw_table, clean_table))
 
-        logger.info("Starting ETL run from %s", csv_path)
+        logger.info("Starting ETL run from %s", source_path)
         try:
-            for index, chunk in enumerate(self.extract(csv_path), start=1):
+            for index, chunk in enumerate(self.extract(source_path), start=1):
                 clean_chunk = self.transform(chunk)
 
                 self._append(chunk, raw_table, engine)
@@ -143,31 +146,90 @@ class TaxiETLPipeline:
         return self.stats
 
     def resolve_source_path(self) -> Path:
-        """Return the local CSV path, downloading the dataset if necessary.
+        """Return a local path to the source file, downloading it if necessary.
 
-        The explicit ``etl.source.csv_path`` override wins; otherwise the
-        dataset is fetched with ``kagglehub`` into its managed cache.
+        Resolution order:
+            1. ``etl.source.local_path`` -- an explicit override.
+            2. A previously downloaded file in ``etl.source.download_dir``.
+            3. ``etl.source.url`` -- the NYC TLC public parquet (no credentials).
+            4. ``etl.source.kaggle_dataset`` -- the Kaggle mirror, via kagglehub.
 
         Returns:
-            Absolute path to the source CSV.
+            Absolute path to the source file.
 
         Raises:
-            ETLError: If the file is absent or ``kagglehub`` is not installed.
+            ETLError: If no source can be resolved.
         """
         source = self.cfg.etl.source
-        override = source.get("csv_path")
+
+        override = source.get("local_path")
         if override:
             path = Path(str(override)).expanduser().resolve()
             if not path.is_file():
-                raise ETLError(f"Configured etl.source.csv_path does not exist: {path}")
+                raise ETLError(f"Configured etl.source.local_path does not exist: {path}")
             return path
 
+        url = source.get("url")
+        if url:
+            destination = (
+                Path(str(source.download_dir)).expanduser().resolve() / Path(str(url)).name
+            )
+            if destination.is_file():
+                logger.info("Using cached download %s", destination)
+                return destination
+            return self._download(str(url), destination)
+
+        return self._download_from_kaggle()
+
+    def _download(self, url: str, destination: Path) -> Path:
+        """Stream a remote file to disk, writing atomically via a temp file.
+
+        Args:
+            url: HTTP(S) URL to fetch.
+            destination: Final path for the downloaded file.
+
+        Returns:
+            The path the file was written to.
+
+        Raises:
+            ETLError: If the download fails or writes an empty file.
+        """
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(destination.suffix + ".part")
+        logger.info("Downloading %s -> %s", url, destination)
+
+        try:
+            with urlopen(url) as response, temporary.open("wb") as handle:  # noqa: S310
+                shutil.copyfileobj(response, handle, length=1 << 20)
+        except (URLError, OSError) as exc:
+            temporary.unlink(missing_ok=True)
+            raise ETLError(f"Failed to download {url}: {exc}") from exc
+
+        if temporary.stat().st_size == 0:
+            temporary.unlink(missing_ok=True)
+            raise ETLError(f"Download from {url} produced an empty file.")
+
+        temporary.replace(destination)
+        logger.info("Downloaded %.1f MB", destination.stat().st_size / 1e6)
+        return destination
+
+    def _download_from_kaggle(self) -> Path:
+        """Fetch the dataset from the Kaggle mirror via ``kagglehub``.
+
+        Returns:
+            Absolute path to the expected file inside the kagglehub cache.
+
+        Raises:
+            ETLError: If ``kagglehub`` is missing, the download fails, or the
+                expected file is not present in the downloaded dataset.
+        """
+        source = self.cfg.etl.source
         try:
             import kagglehub  # noqa: PLC0415 - optional, only needed on cache miss.
         except ImportError as exc:
             raise ETLError(
-                "kagglehub is required to download the dataset. Install the extra with "
-                "`pip install -e '.[data]'`, or set NYC_TAXI_CSV_PATH to a local CSV."
+                "kagglehub is required for the Kaggle fallback. Install it with "
+                "`pip install -e '.[data]'`, or set NYC_TAXI_SOURCE_PATH to a local file."
             ) from exc
 
         logger.info("Downloading dataset %s via kagglehub", source.kaggle_dataset)
@@ -176,17 +238,50 @@ class TaxiETLPipeline:
         except Exception as exc:  # noqa: BLE001 - network/auth failures vary.
             raise ETLError(f"kagglehub download failed: {exc}") from exc
 
-        path = root / str(source.csv_filename)
+        path = root / str(source.kaggle_filename)
         if not path.is_file():
-            raise ETLError(f"Expected file {source.csv_filename!r} was not found under {root}.")
+            raise ETLError(f"Expected file {source.kaggle_filename!r} was not found under {root}.")
         logger.info("Dataset available at %s", path)
         return path
 
-    def extract(self, csv_path: Path | str) -> Iterator[pd.DataFrame]:
-        """Stream the CSV in chunks, validating the schema of each one.
+    def _resolve_format(self, path: Path) -> str:
+        """Determine whether the source should be read as CSV or parquet.
 
         Args:
-            csv_path: Path to the source CSV.
+            path: Source file path.
+
+        Returns:
+            Either ``"csv"`` or ``"parquet"``.
+
+        Raises:
+            ETLError: If the configured format is unsupported, or ``auto`` is
+                used with an unrecognised file suffix.
+        """
+        declared = str(self.cfg.etl.source.format).strip().lower()
+        if declared in {"csv", "parquet"}:
+            return declared
+        if declared != "auto":
+            raise ETLError(
+                f"Unsupported etl.source.format {declared!r}; expected auto, csv or parquet."
+            )
+
+        suffix = path.suffix.lower()
+        if suffix in {".csv", ".gz", ".zip", ".bz2"}:
+            return "csv"
+        if suffix in {".parquet", ".pq"}:
+            return "parquet"
+        raise ETLError(
+            f"Cannot infer a format for {path.name!r}; set etl.source.format explicitly."
+        )
+
+    def extract(self, source_path: Path | str) -> Iterator[pd.DataFrame]:
+        """Stream the source file in chunks, validating the schema of each one.
+
+        Honours ``etl.max_rows``: the final chunk is truncated so that no more
+        than that many rows are ever yielded.
+
+        Args:
+            source_path: Path to the source CSV or parquet file.
 
         Yields:
             Schema-validated chunks of at most ``etl.chunk_size`` rows.
@@ -196,23 +291,127 @@ class TaxiETLPipeline:
             ValueError: If a required column is absent from a chunk.
             TypeError: If a required column has an unexpected dtype.
         """
-        path = Path(csv_path).expanduser().resolve()
+        path = Path(source_path).expanduser().resolve()
         if not path.is_file():
-            raise ETLError(f"CSV file not found: {path}")
+            raise ETLError(f"Source file not found: {path}")
 
+        file_format = self._resolve_format(path)
         chunk_size = int(self.cfg.etl.chunk_size)
-        date_columns = [str(column) for column in self.cfg.etl.date_columns]
-        logger.info("Reading %s in chunks of %s rows", path.name, f"{chunk_size:,}")
+        max_rows_cfg = self.cfg.etl.get("max_rows")
+        max_rows = int(max_rows_cfg) if max_rows_cfg is not None else None
 
-        try:
-            reader = pd.read_csv(path, parse_dates=date_columns, chunksize=chunk_size)
-        except (OSError, ValueError) as exc:
-            raise ETLError(f"Failed to open {path}: {exc}") from exc
+        logger.info(
+            "Reading %s as %s in chunks of %s rows%s",
+            path.name,
+            file_format,
+            f"{chunk_size:,}",
+            f" (capped at {max_rows:,} rows)" if max_rows else "",
+        )
 
+        reader = (
+            self._iter_csv_chunks(path, chunk_size)
+            if file_format == "csv"
+            else self._iter_parquet_chunks(path, chunk_size)
+        )
+
+        emitted = 0
         for index, chunk in enumerate(reader, start=1):
+            if max_rows is not None:
+                remaining = max_rows - emitted
+                if remaining <= 0:
+                    break
+                if len(chunk) > remaining:
+                    chunk = chunk.iloc[:remaining]
+
+            chunk = self._normalise_dtypes(chunk)
             self._validate_schema(chunk, index)
+            emitted += len(chunk)
             logger.debug("Chunk #%d extracted (%s rows)", index, f"{len(chunk):,}")
             yield chunk
+
+    def _normalise_dtypes(self, chunk: pd.DataFrame) -> pd.DataFrame:
+        """Coerce a chunk to the dtypes the schema contract expects.
+
+        Sources disagree on timestamp precision -- the NYC TLC parquet files use
+        microseconds while ``pandas.read_csv`` produces nanoseconds -- so the
+        date columns are normalised here rather than loosening the contract.
+
+        Args:
+            chunk: Raw chunk as read from the source.
+
+        Returns:
+            The chunk with its date columns cast to ``datetime64[ns]``.
+
+        Raises:
+            ETLError: If a date column cannot be converted.
+        """
+        date_columns = [
+            str(column) for column in self.cfg.etl.date_columns if str(column) in chunk.columns
+        ]
+        if not date_columns:
+            return chunk
+
+        try:
+            return chunk.astype({column: "datetime64[ns]" for column in date_columns})
+        except (TypeError, ValueError) as exc:
+            raise ETLError(f"Failed to normalise date columns {date_columns}: {exc}") from exc
+
+    def _iter_csv_chunks(self, path: Path, chunk_size: int) -> Iterator[pd.DataFrame]:
+        """Yield chunks of a CSV file.
+
+        Args:
+            path: CSV file to read.
+            chunk_size: Maximum rows per chunk.
+
+        Yields:
+            Raw chunks, with the configured date columns already parsed.
+
+        Raises:
+            ETLError: If the file cannot be opened or parsed.
+        """
+        date_columns = [str(column) for column in self.cfg.etl.date_columns]
+        try:
+            reader = pd.read_csv(path, parse_dates=date_columns, chunksize=chunk_size)
+            yield from reader
+        except (OSError, ValueError) as exc:
+            raise ETLError(f"Failed to read CSV {path}: {exc}") from exc
+
+    def _iter_parquet_chunks(self, path: Path, chunk_size: int) -> Iterator[pd.DataFrame]:
+        """Yield chunks of a parquet file, reading only the required columns.
+
+        Every column is read, not just the ones the model consumes: the raw
+        landing table is meant to be a faithful copy of the source, and columns
+        outside the feature set are exactly what future experiments need.
+
+        Args:
+            path: Parquet file to read.
+            chunk_size: Maximum rows per record batch.
+
+        Yields:
+            Raw chunks as pandas DataFrames.
+
+        Raises:
+            ETLError: If the file cannot be opened, or a required column is
+                absent from the parquet schema.
+        """
+        try:
+            import pyarrow.parquet as pq  # noqa: PLC0415 - heavy optional import.
+
+            parquet_file = pq.ParquetFile(path)
+        except Exception as exc:  # noqa: BLE001 - pyarrow raises a variety of errors.
+            raise ETLError(f"Failed to open parquet file {path}: {exc}") from exc
+
+        available = set(parquet_file.schema_arrow.names)
+        wanted = {str(name) for name in self.cfg.etl.required_columns}
+        missing = sorted(wanted - available)
+        if missing:
+            raise ETLError(f"Parquet file {path.name} is missing required column(s): {missing}")
+
+        try:
+            for batch in parquet_file.iter_batches(batch_size=chunk_size):
+                yield batch.to_pandas()
+        except Exception as exc:  # noqa: BLE001 - pyarrow raises a variety of errors.
+            raise ETLError(f"Failed to read parquet {path}: {exc}") from exc
 
     def transform(self, frame: pd.DataFrame) -> pd.DataFrame:
         """Derive features, enforce business rules and drop incomplete rows.

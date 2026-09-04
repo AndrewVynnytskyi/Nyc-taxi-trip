@@ -15,29 +15,31 @@ CREATE SCHEMA IF NOT EXISTS public;
 -- -----------------------------------------------------------------------------
 -- Raw landing table -- a faithful, unfiltered copy of the source CSV.
 -- Created by the ETL; this definition documents the contract and is used when
--- provisioning an empty database ahead of the first load.
+-- provisioning an empty database ahead of the first load. Columns follow the
+-- NYC TLC re-published parquet schema, which carries zone IDs
+-- (PULocationID/DOLocationID) rather than the lat/lon of the original 2015 CSV.
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.nyc_raw_taxi
 (
-    "VendorID"              INTEGER,
+    "VendorID"              BIGINT,
     tpep_pickup_datetime    TIMESTAMP        NOT NULL,
     tpep_dropoff_datetime   TIMESTAMP        NOT NULL,
-    passenger_count         INTEGER,
+    passenger_count         BIGINT,
     trip_distance           DOUBLE PRECISION,
-    pickup_longitude        DOUBLE PRECISION,
-    pickup_latitude         DOUBLE PRECISION,
-    "RateCodeID"            INTEGER,
+    "RatecodeID"            BIGINT,
     store_and_fwd_flag      TEXT,
-    dropoff_longitude       DOUBLE PRECISION,
-    dropoff_latitude        DOUBLE PRECISION,
-    payment_type            INTEGER,
+    "PULocationID"          BIGINT,
+    "DOLocationID"          BIGINT,
+    payment_type            BIGINT,
     fare_amount             DOUBLE PRECISION,
     extra                   DOUBLE PRECISION,
     mta_tax                 DOUBLE PRECISION,
     tip_amount              DOUBLE PRECISION,
     tolls_amount            DOUBLE PRECISION,
     improvement_surcharge   DOUBLE PRECISION,
-    total_amount            DOUBLE PRECISION
+    total_amount            DOUBLE PRECISION,
+    congestion_surcharge    DOUBLE PRECISION,
+    airport_fee             DOUBLE PRECISION
 );
 
 COMMENT ON TABLE public.nyc_raw_taxi IS

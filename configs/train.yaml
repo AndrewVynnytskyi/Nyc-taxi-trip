@@ -26,11 +26,21 @@ project:
 # ------------------------------------------------------------------------------
 etl:
   source:
+    # Resolution order: `local_path` -> `url` -> kagglehub.
+    # The NYC TLC parquet is the authoritative public source and needs no
+    # credentials; the Kaggle mirror is kept as a fallback.
+    local_path: ${oc.env:NYC_TAXI_SOURCE_PATH,null}
+    url: https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2015-01.parquet
     kaggle_dataset: elemento/nyc-yellow-taxi-trip-data
-    csv_filename: yellow_tripdata_2015-01.csv
-    # Optional explicit override; when null the dataset is fetched via kagglehub.
-    csv_path: ${oc.env:NYC_TAXI_CSV_PATH,null}
+    kaggle_filename: yellow_tripdata_2015-01.csv
+    # auto | csv | parquet -- `auto` infers from the file suffix.
+    format: auto
+    # Where a downloaded file is cached.
+    download_dir: ${project.data_dir}
   chunk_size: 100000
+  # Cap the rows ingested per run; null ingests everything. Intended for fast
+  # iteration on a laptop against a 12.7M-row month.
+  max_rows: ${oc.env:NYC_TAXI_MAX_ROWS,null}
   date_columns:
     - tpep_pickup_datetime
     - tpep_dropoff_datetime
@@ -91,10 +101,19 @@ database:
 # ------------------------------------------------------------------------------
 data:
   table: ${database.clean_table}
-  target: trip_duration_minutes
+  # Regression target. Both options are trained from the SAME feature set, so
+  # switching is a one-token override and the two runs are directly comparable:
+  #   fare_amount           -- the business-relevant quantity (upfront fare quoting).
+  #   trip_duration_minutes -- the harder problem: effective speed varies with traffic.
+  target: fare_amount
+  # Unit label for logs, plots and metric captions. Metrics are inverse-transformed
+  # into this unit so RMSE/MAE are always interpretable.
+  target_unit: USD
+  # `fare_amount` and `trip_duration_minutes` are deliberately BOTH excluded from
+  # the features: whichever is not the target is unknown at pickup time, so using
+  # it would leak information the model would not have when serving a quote.
   numerical_features:
     - trip_distance
-    - fare_amount
     - passenger_count
   # Encoded as sin/cos pairs; `period` is the cycle length of the raw value.
   cyclical_features:
@@ -143,7 +162,7 @@ training:
   early_stopping_patience: 5
   early_stopping_min_delta: 0.0001
   checkpoint_dir: ${project.artifact_dir}/checkpoints
-  checkpoint_name: ${model.name}_best.pt
+  checkpoint_name: ${model.name}_${data.target}_best.pt
   monitor_metric: val_rmse
   monitor_mode: min         # min | max
   log_every_n_steps: 50

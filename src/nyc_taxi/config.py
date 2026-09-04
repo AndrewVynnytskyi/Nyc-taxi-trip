@@ -29,10 +29,17 @@ _ROOT_MARKERS: Final[tuple[str, ...]] = ("pyproject.toml", ".git")
 #: Default config file, relative to the project root.
 DEFAULT_CONFIG_PATH: Final[str] = "configs/train.yaml"
 
-#: Config keys holding a filesystem path that must be absolute after loading.
-_PATH_KEYS: Final[tuple[tuple[str, ...], ...]] = (
-    ("project", "data_dir"),
-    ("project", "artifact_dir"),
+#: Dotted config keys holding a filesystem path that must be absolute after
+#: loading. Derived keys (e.g. ``training.checkpoint_dir``) are listed too: by
+#: the time interpolation has run, they already contain the *resolved* relative
+#: value, so fixing only their source key would leave them CWD-dependent -- which
+#: silently writes artifacts next to whatever directory the process started in.
+_PATH_KEYS: Final[tuple[str, ...]] = (
+    "project.data_dir",
+    "project.artifact_dir",
+    "training.checkpoint_dir",
+    "data.cache_path",
+    "etl.source.download_dir",
 )
 
 
@@ -241,10 +248,10 @@ def _absolutise_paths(cfg: DictConfig, root: Path) -> None:
         cfg: Configuration tree, mutated in place.
         root: Repository root used as the base for relative paths.
     """
-    for section, key in _PATH_KEYS:
-        raw = OmegaConf.select(cfg, f"{section}.{key}")
-        if isinstance(raw, str) and not Path(raw).is_absolute():
-            OmegaConf.update(cfg, f"{section}.{key}", str((root / raw).resolve()), merge=False)
+    for dotted_key in _PATH_KEYS:
+        raw = OmegaConf.select(cfg, dotted_key)
+        if isinstance(raw, str) and raw and not Path(raw).is_absolute():
+            OmegaConf.update(cfg, dotted_key, str((root / raw).resolve()), merge=False)
 
 
 def _validate(cfg: DictConfig) -> None:

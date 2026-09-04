@@ -1,7 +1,8 @@
 # NYC Taxi Trip Analytics
 
 Production-grade pipeline that ingests NYC Yellow Taxi trip records into PostgreSQL
-and trains a PyTorch regressor to predict **trip duration in minutes**.
+and trains a PyTorch regressor on a configurable per-trip target — `fare_amount` (USD)
+by default, or `trip_duration_minutes`.
 
 ## Architecture
 
@@ -18,6 +19,7 @@ src/nyc_taxi/
 notebooks/
   00_etl_pipeline.ipynb     Thin orchestration of the ETL
   01_baseline_training.ipynb Thin orchestration of training + presentation-ready figures
+scripts/compare_targets.py  Benchmarks fare_amount vs trip_duration_minutes
 sql/
   00_init_database.sql      Database and least-privilege role provisioning
   01_schema.sql             Tables, CHECK constraints mirroring etl.filters, indexes
@@ -85,10 +87,41 @@ pytest
 All five pass on the committed tree; `.pre-commit-config.yaml` runs them on every commit
 and additionally strips notebook outputs and lints notebook code cells via `nbQA`.
 
-## Model
+## Model and target
 
-`TripDurationMLP` — a residual MLP over 7 features (trip distance, fare, passenger count,
-and sine/cosine encodings of pickup hour and day of week). The target is
-`log1p`-transformed and standardised; metrics are inverse-transformed so RMSE and MAE are
-reported in **minutes**. The reference to beat is the `(dayofweek, hour)` bucket mean,
-computed by query 6 in `sql/02_analytics.sql` and reproduced in the notebook.
+`TripDurationMLP` — a residual MLP over **6 features**: trip distance, passenger count,
+and sine/cosine encodings of pickup hour and day of week. The target is `log1p`-transformed
+and standardised; metrics are inverse-transformed, so RMSE and MAE are reported in the
+target's own unit (`data.target_unit`).
+
+`fare_amount` and `trip_duration_minutes` are **both** excluded from the features:
+whichever one is not the target is unknown at pickup time, so using it as an input would
+leak information the model would not have when serving a live quote.
+
+Switching targets is a single override — the feature set is identical, so the runs are
+directly comparable:
+
+```bash
+python scripts/compare_targets.py            # benchmarks both, side by side
+nyc-taxi-train data.target=trip_duration_minutes data.target_unit=min
+```
+
+The reference to beat is the `(dayofweek, hour)` bucket mean, computed by query 6 in
+`sql/02_analytics.sql` and reproduced in both the notebook and the comparison script.
+
+### Measured results
+
+NYC TLC January 2015, first 2M rows ingested → 1,984,004 clean trips (99.2% retention),
+split 1,388,802 / 297,601 / 297,601. Identical 6-feature input for both targets; CPU
+training with early stopping. Reproduce with `python scripts/compare_targets.py`.
+
+| target | σ | baseline RMSE | model RMSE | improvement | R² | epochs |
+|---|---|---|---|---|---|---|
+| `fare_amount` (USD) | 10.49 | 10.415 | **3.060** | 70.6% | **0.9150** | 8 |
+| `trip_duration_minutes` | 8.81 | 8.713 | **4.195** | 51.9% | **0.7745** | 15 |
+
+`fare_amount` is the easier target of the two: the 2015 NYC meter is a published function
+of distance and waiting time, so most of the signal is already in `trip_distance`.
+Trip duration is harder because it depends on effective speed, which varies with traffic
+in ways the current feature set cannot observe — that gap is where geography (`PULocationID`
+/ `DOLocationID`) would pay off most.

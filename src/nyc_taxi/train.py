@@ -59,8 +59,8 @@ class EpochResult:
         epoch: 1-based epoch index.
         train_loss: Mean training loss in model space.
         val_loss: Mean validation loss in model space.
-        val_rmse: Validation RMSE in minutes (original units).
-        val_mae: Validation MAE in minutes (original units).
+        val_rmse: Validation RMSE in the target's original unit.
+        val_mae: Validation MAE in the target's original unit.
         val_r2: Validation coefficient of determination.
         learning_rate: LR in effect during the epoch.
         duration_seconds: Wall-clock duration of the epoch.
@@ -159,6 +159,7 @@ class Trainer:
         self.current_epoch = 0
         self.global_step = 0
 
+        self._unit = str(cfg.data.get("target_unit", "") or "")
         self._monitor = str(cfg.training.monitor_metric)
         self._mode = str(cfg.training.monitor_mode)
         self._best_score = math.inf if self._mode == "min" else -math.inf
@@ -228,13 +229,15 @@ class Trainer:
 
                 logger.info(
                     "Epoch %03d/%03d | train_loss=%.4f | val_loss=%.4f | "
-                    "val_rmse=%.3f min | val_mae=%.3f min | val_r2=%.4f | lr=%.2e | %.1fs",
+                    "val_rmse=%.3f %s | val_mae=%.3f %s | val_r2=%.4f | lr=%.2e | %.1fs",
                     epoch,
                     epochs,
                     result.train_loss,
                     result.val_loss,
                     result.val_rmse,
+                    self._unit,
                     result.val_mae,
+                    self._unit,
                     result.val_r2,
                     result.learning_rate,
                     result.duration_seconds,
@@ -276,7 +279,7 @@ class Trainer:
 
         Returns:
             Mapping with ``loss``, ``rmse``, ``mae`` and ``r2``. Error metrics
-            are in minutes.
+            are in the target's original unit.
 
         Raises:
             TrainingError: If the split is unknown.
@@ -295,25 +298,27 @@ class Trainer:
 
         metrics = self._evaluate(loader, stage=split)
         logger.info(
-            "%s | loss=%.4f | rmse=%.3f min | mae=%.3f min | r2=%.4f",
+            "%s | loss=%.4f | rmse=%.3f %s | mae=%.3f %s | r2=%.4f",
             split.upper(),
             metrics["loss"],
             metrics["rmse"],
+            self._unit,
             metrics["mae"],
+            self._unit,
             metrics["r2"],
         )
         return metrics
 
     @torch.inference_mode()
     def predict(self, loader: DataLoader[Batch]) -> tuple[FloatArray, FloatArray]:
-        """Generate predictions in the original unit (minutes).
+        """Generate predictions in the target's original unit.
 
         Args:
             loader: Loader over the data to predict.
 
         Returns:
             Tuple of ``(predictions, targets)``, both 1-D ``float32`` arrays of
-            trip duration in minutes.
+            the target in its original unit.
         """
         self.model.eval()
         predictions: list[Tensor] = []
@@ -468,7 +473,7 @@ class Trainer:
 
         Returns:
             Mapping with ``loss`` (model space) plus ``rmse``, ``mae`` and
-            ``r2`` computed in minutes.
+            ``r2`` computed in the target's original unit.
         """
         self.model.eval()
         running_loss = 0.0
@@ -508,8 +513,8 @@ class Trainer:
         """Compute RMSE, MAE and R^2 in the original unit.
 
         Args:
-            y_true: Ground-truth values in minutes.
-            y_pred: Predicted values in minutes.
+            y_true: Ground-truth values in the target's original unit.
+            y_pred: Predicted values in the target's original unit.
 
         Returns:
             Mapping with ``rmse``, ``mae`` and ``r2``.

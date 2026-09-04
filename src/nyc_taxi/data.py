@@ -318,7 +318,7 @@ class TaxiDataModule:
         """Apply the target transform: optional ``log1p`` then standardisation.
 
         Args:
-            targets: Raw target vector in the original unit (minutes).
+            targets: Raw target vector in the target's original unit.
 
         Returns:
             The transformed target vector.
@@ -331,16 +331,17 @@ class TaxiDataModule:
         return np.asarray(values, dtype=np.float32)
 
     def inverse_transform_target(self, targets: FloatArray | torch.Tensor) -> FloatArray:
-        """Map model-space predictions back to minutes.
+        """Map model-space predictions back to the target's original unit.
 
-        This is the exact inverse of :meth:`transform_target` and is what makes
-        reported RMSE/MAE interpretable as "minutes of trip duration".
+        This is the exact inverse of :meth:`transform_target`, which is what
+        makes reported RMSE/MAE interpretable in the target's own unit
+        (USD for ``fare_amount``, minutes for ``trip_duration_minutes``).
 
         Args:
             targets: Predictions or targets in model space.
 
         Returns:
-            The values in the original unit (minutes), as ``float32``.
+            The values in the target's original unit, as ``float32``.
         """
         values = (
             targets.detach().cpu().numpy()
@@ -434,7 +435,7 @@ class TaxiDataModule:
         """Fit the target scaler on the (optionally log-transformed) train split.
 
         Args:
-            targets: Raw training targets in minutes.
+            targets: Raw training targets in the target's original unit.
 
         Returns:
             The fitted scaler.

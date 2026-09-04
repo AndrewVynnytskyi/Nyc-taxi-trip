@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -10,7 +12,7 @@ from omegaconf import DictConfig
 
 from nyc_taxi.config import ConfigError, load_config
 from nyc_taxi.data import DataError, TaxiDataModule
-from nyc_taxi.etl import TaxiETLPipeline
+from nyc_taxi.etl import ETLError, TaxiETLPipeline
 from nyc_taxi.model import ModelError, build_model
 
 
@@ -80,3 +82,73 @@ def test_model_forward_shape_and_contract(cfg: DictConfig) -> None:
     assert output.shape == (16, 1)
     with pytest.raises(ModelError, match="Expected 7 input features"):
         model(torch.randn(16, 5))
+
+
+def test_extract_reads_parquet_and_normalises_timestamps(
+    cfg: DictConfig, raw_frame: pd.DataFrame, tmp_path: Path
+) -> None:
+    """Microsecond timestamps from parquet are coerced to the ns contract."""
+    source = tmp_path / "trips.parquet"
+    raw_frame.astype(
+        {
+            "tpep_pickup_datetime": "datetime64[us]",
+            "tpep_dropoff_datetime": "datetime64[us]",
+        }
+    ).to_parquet(source, index=False)
+
+    pipeline = TaxiETLPipeline(cfg)
+    chunks = list(pipeline.extract(source))
+
+    assert chunks, "expected at least one chunk"
+    combined = pd.concat(chunks, ignore_index=True)
+    assert len(combined) == len(raw_frame)
+    assert str(combined["tpep_pickup_datetime"].dtype) == "datetime64[ns]"
+    # The raw landing table must stay faithful: every source column survives.
+    assert set(raw_frame.columns) <= set(combined.columns)
+
+
+def test_extract_honours_max_rows(cfg: DictConfig, raw_frame: pd.DataFrame, tmp_path: Path) -> None:
+    """`etl.max_rows` truncates the stream, including mid-chunk."""
+    source = tmp_path / "trips.csv"
+    raw_frame.to_csv(source, index=False)
+
+    capped = load_config(overrides=["etl.max_rows=100", "etl.chunk_size=64"])
+    total = sum(len(chunk) for chunk in TaxiETLPipeline(capped).extract(source))
+
+    assert total == 100
+
+
+def test_resolve_format_rejects_unknown_suffix(cfg: DictConfig, tmp_path: Path) -> None:
+    """`auto` format detection fails loudly rather than guessing."""
+    with pytest.raises(ETLError, match="Cannot infer a format"):
+        TaxiETLPipeline(cfg)._resolve_format(tmp_path / "trips.orc")
+
+
+def test_metrics_are_reported_in_the_configured_unit(cfg: DictConfig) -> None:
+    """The target unit is carried through to the Trainer for logging."""
+    assert cfg.data.target_unit
+    assert cfg.data.target not in cfg.data.numerical_features
+    # Neither candidate target may appear as a feature: whichever is not the
+    # target is unknown at pickup time and would leak.
+    assert "fare_amount" not in cfg.data.numerical_features
+    assert "trip_duration_minutes" not in cfg.data.numerical_features
+
+
+def test_derived_paths_are_absolute_regardless_of_cwd(
+    cfg: DictConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Artifact paths must not depend on the process working directory.
+
+    Regression test: `training.checkpoint_dir` interpolates `project.artifact_dir`,
+    so absolutising only the source key left the derived key relative and wrote
+    checkpoints next to whatever directory the run started in.
+    """
+    monkeypatch.chdir(tmp_path)
+    reloaded = load_config()
+
+    for key in ("training.checkpoint_dir", "data.cache_path", "project.artifact_dir"):
+        value = reloaded
+        for part in key.split("."):
+            value = value[part]
+        assert Path(str(value)).is_absolute(), f"{key} is relative: {value}"
+        assert "notebooks" not in str(value)
