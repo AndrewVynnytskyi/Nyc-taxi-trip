@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Environments
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ipynb_checkpoints/
+
+# Data & artifacts (tracked via the DB and W&B, never git)
+data/*
+!data/.gitkeep
+models/*
+!models/.gitkeep
+artifacts/
+wandb/
+*.csv
+*.parquet
+*.pt
+*.ckpt
+*.log
+
+# IDE
+.idea/
+.vscode/
+.DS_Store

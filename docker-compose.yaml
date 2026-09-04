@@ -1,0 +1,61 @@
+# Local development stack: PostgreSQL plus the training image.
+#   docker compose up -d postgres     # database only, for notebook work
+#   docker compose run --rm etl       # CSV -> PostgreSQL
+#   docker compose run --rm train     # training run
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-nyc_taxi}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-nyc_taxi}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  etl:
+    build:
+      context: .
+      args:
+        BASE_IMAGE: python:3.11-slim-bookworm
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    env_file: [.env]
+    environment:
+      POSTGRES_HOST: postgres
+    command: ["nyc-taxi-etl"]
+    volumes:
+      - ./data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  train:
+    build:
+      context: .
+    env_file: [.env]
+    environment:
+      POSTGRES_HOST: postgres
+    command: ["nyc-taxi-train"]
+    volumes:
+      - ./data:/data
+      - ./models:/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  postgres_data:

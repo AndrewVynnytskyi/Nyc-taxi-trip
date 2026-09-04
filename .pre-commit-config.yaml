@@ -1,0 +1,70 @@
+# Enforces the project's production standard on every commit.
+# Install once with:  pre-commit install && pre-commit install --hook-type commit-msg
+default_language_version:
+  python: python3.11
+
+default_stages: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+        args: ["--allow-multiple-documents"]
+      - id: debug-statements
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: trailing-whitespace
+
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+        args: ["--line-length=100"]
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--profile=black", "--line-length=100"]
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.1.0
+    hooks:
+      - id: flake8
+        additional_dependencies:
+          - flake8-docstrings==1.7.0
+          - flake8-bugbear==24.4.26
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        files: ^src/
+        args: ["--config-file=pyproject.toml"]
+        additional_dependencies:
+          - types-tqdm
+          - pandas-stubs
+          - omegaconf
+
+  # Notebooks are production artifacts too: strip outputs and lint the code cells.
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.7.1
+    hooks:
+      - id: nbstripout
+
+  - repo: https://github.com/nbQA-dev/nbQA
+    rev: 1.8.5
+    hooks:
+      - id: nbqa-black
+        args: ["--line-length=100"]
+      - id: nbqa-isort
+        args: ["--profile=black"]
+      - id: nbqa-flake8
+        args: ["--extend-ignore=E402,D100,D103"]

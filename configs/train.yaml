@@ -1,0 +1,181 @@
+# ==============================================================================
+# NYC Taxi Trip Analytics -- single source of truth for every hyperparameter,
+# path and magic number in the project. No numeric literal may be hardcoded in
+# `src/` or `notebooks/`.
+#
+# Loaded with OmegaConf/Hydra. Environment interpolation keeps secrets and
+# machine-specific paths out of version control:
+#   ${oc.env:VAR,default}
+# ==============================================================================
+
+defaults:
+  - _self_
+
+project:
+  name: nyc-taxi-trip-analytics
+  seed: 42
+  # Root directories are environment-driven so the same config runs on a laptop,
+  # in Docker (/data, /artifacts) and on a training cluster.
+  # Relative values are resolved against the repository root by
+  # `nyc_taxi.config.load_config`, so notebooks and containers agree.
+  data_dir: ${oc.env:NYC_TAXI_DATA_DIR,data}
+  artifact_dir: ${oc.env:NYC_TAXI_ARTIFACT_DIR,models}
+
+# ------------------------------------------------------------------------------
+# ETL -- extract / transform / load into PostgreSQL (DataGrip-friendly schema).
+# ------------------------------------------------------------------------------
+etl:
+  source:
+    kaggle_dataset: elemento/nyc-yellow-taxi-trip-data
+    csv_filename: yellow_tripdata_2015-01.csv
+    # Optional explicit override; when null the dataset is fetched via kagglehub.
+    csv_path: ${oc.env:NYC_TAXI_CSV_PATH,null}
+  chunk_size: 100000
+  date_columns:
+    - tpep_pickup_datetime
+    - tpep_dropoff_datetime
+  # Schema contract validated on every extracted chunk.
+  required_columns:
+    VendorID: int64
+    tpep_pickup_datetime: datetime64[ns]
+    tpep_dropoff_datetime: datetime64[ns]
+    passenger_count: int64
+    trip_distance: float64
+    fare_amount: float64
+  critical_columns:
+    - tpep_pickup_datetime
+    - tpep_dropoff_datetime
+    - fare_amount
+  output_columns:
+    - tpep_pickup_datetime
+    - tpep_dropoff_datetime
+    - passenger_count
+    - trip_distance
+    - trip_duration_minutes
+    - pickup_hour
+    - pickup_dayofweek
+    - fare_amount
+  # Business rules for a physically plausible trip. Previously hardcoded in the
+  # notebook filter expression.
+  filters:
+    min_trip_duration_minutes: 0.0
+    max_trip_duration_minutes: 180.0
+    min_fare_amount: 0.0
+    max_fare_amount: 500.0
+    min_passenger_count: 1
+    max_passenger_count: 6
+    min_trip_distance: 0.0
+    max_trip_distance: 100.0
+
+database:
+  driver: postgresql+psycopg2
+  host: ${oc.env:POSTGRES_HOST,localhost}
+  port: ${oc.env:POSTGRES_PORT,5432}
+  user: ${oc.env:POSTGRES_USER,postgres}
+  # Left null on purpose: `nyc_taxi.database.build_url` raises a clear error if
+  # POSTGRES_PASSWORD is not exported. A literal `???` would make OmegaConf
+  # raise on *any* access, breaking config loading for non-database work.
+  password: ${oc.env:POSTGRES_PASSWORD,null}
+  database: ${oc.env:POSTGRES_DB,nyc_taxi}
+  schema: public
+  raw_table: nyc_raw_taxi
+  clean_table: nyc_clean_taxi
+  # SQLAlchemy engine tuning.
+  pool_size: 5
+  max_overflow: 10
+  pool_pre_ping: true
+  echo: false
+
+# ------------------------------------------------------------------------------
+# Data -- feature contract and DataLoader construction.
+# ------------------------------------------------------------------------------
+data:
+  table: ${database.clean_table}
+  target: trip_duration_minutes
+  numerical_features:
+    - trip_distance
+    - fare_amount
+    - passenger_count
+  # Encoded as sin/cos pairs; `period` is the cycle length of the raw value.
+  cyclical_features:
+    pickup_hour: 24
+    pickup_dayofweek: 7
+  # null -> load the full table. Set an integer for fast experimentation.
+  row_limit: ${oc.env:NYC_TAXI_ROW_LIMIT,null}
+  cache_path: ${project.data_dir}/clean_trips.parquet
+  use_cache: true
+  val_size: 0.15
+  test_size: 0.15
+  # Target is log1p-transformed to tame the heavy right tail of trip durations.
+  log_transform_target: true
+  standardize_features: true
+  loader:
+    batch_size: 1024
+    eval_batch_size: 4096
+    num_workers: 4
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+    drop_last: false
+
+# ------------------------------------------------------------------------------
+# Model -- residual MLP regressor.
+# ------------------------------------------------------------------------------
+model:
+  name: TripDurationMLP
+  hidden_dims: [256, 128, 64]
+  dropout: 0.15
+  activation: gelu          # one of: relu | gelu | silu
+  use_batch_norm: true
+  residual: true
+
+# ------------------------------------------------------------------------------
+# Training.
+# ------------------------------------------------------------------------------
+training:
+  max_epochs: 30
+  device: auto              # auto | cuda | cpu
+  criterion: huber          # mse | mae | huber
+  huber_delta: 1.0
+  gradient_clip_norm: 1.0
+  accumulation_steps: 1
+  use_amp: true
+  early_stopping_patience: 5
+  early_stopping_min_delta: 0.0001
+  checkpoint_dir: ${project.artifact_dir}/checkpoints
+  checkpoint_name: ${model.name}_best.pt
+  monitor_metric: val_rmse
+  monitor_mode: min         # min | max
+  log_every_n_steps: 50
+
+optimizer:
+  name: adamw               # adam | adamw | sgd
+  lr: 0.001
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  momentum: 0.9             # used by sgd only
+
+scheduler:
+  name: cosine              # cosine | plateau | step | none
+  warmup_epochs: 1
+  min_lr: 0.000001
+  step_size: 10             # used by step only
+  gamma: 0.1                # used by step | plateau
+  patience: 2               # used by plateau only
+
+# ------------------------------------------------------------------------------
+# Experiment tracking.
+# ------------------------------------------------------------------------------
+wandb:
+  enabled: ${oc.env:WANDB_ENABLED,true}
+  project: nyc-taxi-trip-analytics
+  entity: ${oc.env:WANDB_ENTITY,null}
+  mode: ${oc.env:WANDB_MODE,online}   # online | offline | disabled
+  group: baseline
+  job_type: train
+  tags:
+    - baseline
+    - mlp
+    - regression
+  log_gradients: false
+  watch_log_freq: 100
