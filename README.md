@@ -125,3 +125,7 @@ of distance and waiting time, so most of the signal is already in `trip_distance
 Trip duration is harder because it depends on effective speed, which varies with traffic
 in ways the current feature set cannot observe — that gap is where geography (`PULocationID`
 / `DOLocationID`) would pay off most.
+
+## License
+
+Released under the [MIT License](LICENSE).

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Production-grade ETL + deep-learning pipeline for NYC Yellow Taxi trip analytics."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
-license = { text = "MIT" }
+# PEP 639: SPDX expression plus the licence file shipped in the distribution.
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Andrzej Kawinn", email = "nikoljavin@gmail.com" }]
 keywords = ["mlops", "pytorch", "etl", "nyc-taxi", "regression"]
 
