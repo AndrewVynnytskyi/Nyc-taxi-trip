@@ -86,7 +86,7 @@ def load_config(
     Args:
         config_path: Path to the YAML config. Relative paths are resolved
             against the project root. Defaults to ``configs/train.yaml``.
-        overrides: Hydra-style dotlist overrides, e.g.
+        overrides: OmegaConf dotlist overrides, as given on the command line, e.g.
             ``["training.max_epochs=50", "optimizer.lr=3e-4"]``.
         resolve: Whether to eagerly resolve interpolations (``${...}``). Set to
             ``False`` to keep the config lazy, e.g. before further composition.
@@ -166,7 +166,7 @@ def _read_yaml(path: Path) -> DictConfig:
 
 
 def _apply_overrides(cfg: DictConfig, overrides: Sequence[str]) -> DictConfig:
-    """Merge Hydra-style dotlist overrides into a config.
+    """Merge OmegaConf command-line (dotlist) overrides into a config.
 
     Args:
         cfg: Base configuration.

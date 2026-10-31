@@ -3,7 +3,7 @@
 # path and magic number in the project. No numeric literal may be hardcoded in
 # `src/` or `notebooks/`.
 #
-# Loaded with OmegaConf/Hydra. Environment interpolation keeps secrets and
+# Loaded via OmegaConf with command-line overrides. Environment interpolation keeps secrets and
 # machine-specific paths out of version control:
 #   ${oc.env:VAR,default}
 # ==============================================================================
