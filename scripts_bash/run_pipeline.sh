@@ -8,7 +8,7 @@ cd "$REPO_ROOT"
 
 usage () {
   cat << EOF
-  Usage: $(basename "$0") [OVERRIDES...]
+  Usage: $(basename "$0") [--skip-etl] [OVERRIDES...]
 
   Run the full NYC Taxi pipeline: ETL into PostgreSQL, then training and evaluation.
 
@@ -21,6 +21,7 @@ usage () {
     OVERRIDES     Optional OmegaConf overrides passed to training, in key=value form.
 
   Options:
+    --skip-etl    Skip the ETL step and train on data already in PostgreSQL.
     -h, --help    Show this help and exit.
 
   Examples:
@@ -35,7 +36,7 @@ usage () {
 EOF
 }
 
-SKIP_DOWNLOAD=false
+SKIP_ETL=false
 OVERRIDES=()
 
 while [[ $# -gt 0 ]]; do
@@ -44,8 +45,8 @@ while [[ $# -gt 0 ]]; do
             usage
             exit 0
             ;;
-        --skip-downloads)
-        SKIP_DOWNLOAD=true
+        --skip-etl)
+        SKIP_ETL=true
         shift
         ;;
     *=*)
@@ -88,7 +89,7 @@ trap 'on_error $LINENO' ERR
 START=$SECONDS
 
 CURRENT_STEP="ETL"
-if [[ "$SKIP_DOWNLOAD" == true ]]; then
+if [[ "$SKIP_ETL" == true ]]; then
     log "ETL skipped (--skip-etl)"
 else
     log "ETL started"
