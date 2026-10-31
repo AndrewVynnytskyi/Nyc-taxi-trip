@@ -11,7 +11,7 @@ requires-python = ">=3.10,<3.13"
 # PEP 639: SPDX expression plus the licence file shipped in the distribution.
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "Andrzej Kawinn", email = "nikoljavin@gmail.com" }]
+authors = [{ name = "Andrii Vynnytskyi", email = "nikoljavin@gmail.com" }]
 keywords = ["mlops", "pytorch", "etl", "nyc-taxi", "regression"]
 
 classifiers = [
@@ -62,7 +62,7 @@ nyc-taxi-etl = "nyc_taxi.etl:main"
 nyc-taxi-train = "nyc_taxi.train:main"
 
 [project.urls]
-Repository = "https://github.com/andrzejkawinn/NYCTaxiTripAnalytics"
+Repository = "https://github.com/AndrewVynnytskyi/Nyc-taxi-trip"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

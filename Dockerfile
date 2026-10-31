@@ -70,7 +70,7 @@ ARG APP_UID=10001
 
 LABEL org.opencontainers.image.title="nyc-taxi-trip-analytics" \
       org.opencontainers.image.description="ETL + PyTorch training pipeline for NYC Yellow Taxi trips" \
-      org.opencontainers.image.source="https://github.com/andrzejkawinn/NYCTaxiTripAnalytics" \
+      org.opencontainers.image.source="https://github.com/AndrewVynnytskyi/Nyc-taxi-trip" \
       org.opencontainers.image.licenses="MIT"
 
 ENV VIRTUAL_ENV=/opt/venv \
