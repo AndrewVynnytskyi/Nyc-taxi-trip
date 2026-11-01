@@ -147,7 +147,7 @@ def _read_yaml(path: Path) -> DictConfig:
         path: File to parse.
 
     Returns:
-        The parsed config, with the Hydra-only ``defaults:`` key removed.
+        The parsed config.
 
     Raises:
         ConfigError: If the file cannot be parsed or its root is not a mapping.
@@ -160,8 +160,6 @@ def _read_yaml(path: Path) -> DictConfig:
     if not isinstance(cfg, DictConfig):
         raise ConfigError(f"Configuration root must be a mapping, got {type(cfg).__name__}.")
 
-    # `defaults:` is a Hydra composition directive and carries no runtime value.
-    cfg.pop("defaults", None)
     return cfg
 
 

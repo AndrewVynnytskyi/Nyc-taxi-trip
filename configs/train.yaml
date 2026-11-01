@@ -8,9 +8,6 @@
 #   ${oc.env:VAR,default}
 # ==============================================================================
 
-defaults:
-  - _self_
-
 project:
   name: nyc-taxi-trip-analytics
   seed: 42
