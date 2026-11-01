@@ -68,9 +68,14 @@ GROUP BY bucket
 ORDER BY bucket;
 
 -- -----------------------------------------------------------------------------
--- 6. Baseline the model must beat: predict each trip's duration as the mean of
---    its (dayofweek, hour) bucket. Reports the RMSE of that heuristic so the
---    neural network's val_rmse has a meaningful reference point.
+-- 6. (dayofweek, hour) bucket mean of trip duration, and the RMSE/MAE of using
+--    it as a prediction.
+--
+--    IN-SAMPLE, DESCRIPTIVE FIGURE ONLY: the bucket means are computed on the
+--    same rows they are scored on, over the whole table. It is not comparable
+--    to the model's held-out test metrics. The train/test benchmark (bucket
+--    mean fitted on train, scored on the MLP's test split, plus linear
+--    baselines) lives in nyc_taxi.baseline and scripts/compare_targets.py.
 -- -----------------------------------------------------------------------------
 WITH bucket_mean AS (SELECT pickup_dayofweek,
                             pickup_hour,
