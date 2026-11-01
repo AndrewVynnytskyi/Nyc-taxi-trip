@@ -1,9 +1,17 @@
-"""Benchmark the two candidate regression targets against a heuristic baseline.
+"""Benchmark the two candidate regression targets against non-neural baselines.
 
 Trains :class:`~nyc_taxi.model.TripDurationMLP` twice -- once for each target --
 from an identical feature set, so the two runs are directly comparable. For each
-target it also computes the ``(dayofweek, hour)`` bucket-mean baseline from
-``sql/02_analytics.sql`` (query 6), which is the bar a learned model must clear.
+target it also scores three baselines from :mod:`nyc_taxi.baseline`, all fitted
+on the train split and scored on the same test split as the MLP:
+
+* ``bucket``  -- the ``(dayofweek, hour)`` bucket mean (the train/test version
+  of the in-sample figure in ``sql/02_analytics.sql`` query 6);
+* ``lin_1``   -- linear regression on ``trip_distance`` alone;
+* ``lin_all`` -- linear regression on the MLP's exact input features.
+
+The headline ``improve`` column is the MLP's RMSE reduction over ``lin_1``,
+the simplest model that captures the tariff's per-mile structure.
 
 Usage::
 
@@ -18,9 +26,7 @@ import sys
 from dataclasses import dataclass
 from typing import Sequence
 
-import numpy as np
-import pandas as pd
-
+from nyc_taxi.baseline import bucket_mean, fit_full_linear_regression, fit_one_linear_regression
 from nyc_taxi.config import ConfigError, load_config
 from nyc_taxi.data import DataError, TaxiDataModule
 from nyc_taxi.model import build_model
@@ -46,8 +52,12 @@ class TargetResult:
         model_rmse: Test-set RMSE of the learned model.
         model_mae: Test-set MAE of the learned model.
         model_r2: Test-set coefficient of determination.
-        baseline_rmse: RMSE of the (dayofweek, hour) bucket-mean heuristic.
+        baseline_rmse: Test RMSE of the train-fitted (dayofweek, hour) bucket mean.
         baseline_r2: R^2 of that heuristic.
+        linear_one_rmse: Test RMSE of a linear regression on ``trip_distance`` alone.
+        linear_one_r2: R^2 of that regression.
+        linear_full_rmse: Test RMSE of a linear regression on the MLP's input features.
+        linear_full_r2: R^2 of that regression.
         target_std: Standard deviation of the target, for scale context.
         epochs: Number of epochs actually run before early stopping.
     """
@@ -59,35 +69,21 @@ class TargetResult:
     model_r2: float
     baseline_rmse: float
     baseline_r2: float
+    linear_one_rmse: float
+    linear_one_r2: float
+    linear_full_rmse: float
+    linear_full_r2: float
     target_std: float
     epochs: int
 
     @property
     def rmse_improvement(self) -> float:
-        """Fractional RMSE reduction of the model over the heuristic baseline."""
-        return 1.0 - self.model_rmse / self.baseline_rmse if self.baseline_rmse else 0.0
-
-
-def heuristic_baseline(frame: pd.DataFrame, target: str) -> tuple[float, float]:
-    """Compute the ``(dayofweek, hour)`` bucket-mean baseline.
-
-    Args:
-        frame: Clean-table DataFrame.
-        target: Target column to predict.
-
-    Returns:
-        Tuple of ``(rmse, r2)`` for the heuristic.
-    """
-    predicted = frame.groupby(["pickup_dayofweek", "pickup_hour"])[target].transform("mean")
-    residual = (frame[target] - predicted).to_numpy(dtype=np.float64)
-    variance = float(np.var(frame[target].to_numpy(dtype=np.float64)))
-    rmse = float(np.sqrt(np.mean(residual**2)))
-    r2 = float(1.0 - np.mean(residual**2) / variance) if variance else 0.0
-    return rmse, r2
+        """Fractional RMSE reduction of the model over the distance-only linear baseline."""
+        return 1.0 - self.model_rmse / self.linear_one_rmse if self.linear_one_rmse else 0.0
 
 
 def run_target(target: str, unit: str, overrides: Sequence[str]) -> TargetResult:
-    """Train and evaluate the model for a single target.
+    """Train and evaluate the model and its baselines for a single target.
 
     Args:
         target: Target column name.
@@ -111,7 +107,13 @@ def run_target(target: str, unit: str, overrides: Sequence[str]) -> TargetResult
 
     history = trainer.fit()
     metrics = trainer.evaluate(split="test", restore_best=True)
-    baseline_rmse, baseline_r2 = heuristic_baseline(datamodule.frame, target)
+    baseline_rmse, baseline_r2 = bucket_mean(
+        datamodule.splits["train"], datamodule.splits["test"], target
+    )
+    linear_one_rmse, linear_one_r2 = fit_one_linear_regression(datamodule.splits, target)
+    linear_full_rmse, linear_full_r2 = fit_full_linear_regression(
+        datamodule.splits, target, datamodule.spec.names
+    )
 
     return TargetResult(
         target=target,
@@ -121,6 +123,10 @@ def run_target(target: str, unit: str, overrides: Sequence[str]) -> TargetResult
         model_r2=metrics["r2"],
         baseline_rmse=baseline_rmse,
         baseline_r2=baseline_r2,
+        linear_one_rmse=linear_one_rmse,
+        linear_one_r2=linear_one_r2,
+        linear_full_rmse=linear_full_rmse,
+        linear_full_r2=linear_full_r2,
         target_std=float(datamodule.frame[target].std()),
         epochs=len(history),
     )
@@ -136,19 +142,24 @@ def render(results: Sequence[TargetResult]) -> str:
         The rendered table.
     """
     header = (
-        f"{'target':<24}{'unit':<6}{'std':>9}{'baseline':>10}{'model':>9}"
-        f"{'improve':>9}{'R2':>8}{'epochs':>8}"
+        f"{'target':<24}{'unit':<6}{'std':>9}{'bucket':>9}{'lin_1':>9}{'lin_all':>9}"
+        f"{'mlp':>9}{'improve':>9}{'R2':>8}{'epochs':>8}"
     )
     lines = [header, "-" * len(header)]
     for result in results:
         lines.append(
             f"{result.target:<24}{result.unit:<6}{result.target_std:>9.2f}"
-            f"{result.baseline_rmse:>10.3f}{result.model_rmse:>9.3f}"
-            f"{result.rmse_improvement:>8.1%}{result.model_r2:>8.4f}{result.epochs:>8d}"
+            f"{result.baseline_rmse:>9.3f}{result.linear_one_rmse:>9.3f}"
+            f"{result.linear_full_rmse:>9.3f}{result.model_rmse:>9.3f}"
+            f"{result.rmse_improvement:>9.1%}{result.model_r2:>8.4f}{result.epochs:>8d}"
         )
     lines.append("")
-    lines.append("baseline/model columns are RMSE in the target's own unit (lower is better).")
-    lines.append("improve = RMSE reduction of the model over the (dayofweek, hour) mean.")
+    lines.append(
+        "bucket/lin_1/lin_all/mlp columns are test RMSE in the target's unit (lower is better)."
+    )
+    lines.append(
+        "improve = RMSE reduction of the MLP over the trip_distance-only linear regression."
+    )
     return "\n".join(lines)
 
 
