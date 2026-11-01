@@ -71,6 +71,19 @@ def test_datamodule_roundtrips_the_target(cfg: DictConfig, raw_frame: pd.DataFra
     np.testing.assert_allclose(recovered, original, rtol=1e-3, atol=1e-2)
 
 
+def test_datamodule_splits_match_the_datasets(cfg: DictConfig, raw_frame: pd.DataFrame) -> None:
+    cleaned = TaxiETLPipeline(cfg).transform(raw_frame)
+    module = TaxiDataModule(cfg).setup(frame=cleaned)
+
+    assert sum(len(part) for part in module.splits.values()) == len(cleaned)
+    for split in ("train", "val", "test"):
+        part = module.splits[split]
+        assert len(part) == len(module.dataset(split))
+        assert {"pickup_hour", "pickup_dayofweek"} <= set(part.columns)
+        # Raw cyclical columns are kept for baselines but never fed to the model.
+        assert "pickup_hour" not in module.spec.names
+
+
 def test_datamodule_rejects_missing_columns(cfg: DictConfig, raw_frame: pd.DataFrame) -> None:
     cleaned = TaxiETLPipeline(cfg).transform(raw_frame).drop(columns=["trip_distance"])
     with pytest.raises(DataError, match="configured but absent"):

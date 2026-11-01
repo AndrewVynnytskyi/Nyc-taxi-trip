@@ -136,6 +136,7 @@ class TaxiDataModule:
         self._feature_scaler: StandardScaler | None = None
         self._target_scaler: StandardScaler | None = None
         self._spec: FeatureSpec | None = None
+        self._splits: dict[str, pd.DataFrame] | None = None
 
     # -- Properties ----------------------------------------------------------
 
@@ -149,6 +150,22 @@ class TaxiDataModule:
         if self._spec is None:
             raise DataError("Feature spec is unavailable; call setup() first.")
         return self._spec
+
+    @property
+    def splits(self) -> dict[str, pd.DataFrame]:
+        """The engineered train/val/test frames the datasets were built from.
+
+        Each frame holds the ``spec.names`` features, the target and the raw
+        cyclical columns (e.g. ``pickup_hour``), with the shuffled index left
+        by the split. These are the exact rows the model sees, so baselines
+        computed on them are directly comparable.
+
+        Raises:
+            DataError: If accessed before :meth:`setup` has run.
+        """
+        if self._splits is None:
+            raise DataError("Data splits are unavailable; call setup() first.")
+        return self._splits
 
     @property
     def input_dim(self) -> int:
@@ -185,6 +202,7 @@ class TaxiDataModule:
         engineered, self._spec = self.engineer_features(self._frame)
 
         splits = self._split(engineered)
+        self._splits = splits
         feature_names = list(self._spec.names)
         target = self._spec.target
 
@@ -246,14 +264,16 @@ class TaxiDataModule:
         """Build the model-ready feature frame and its contract.
 
         Cyclical columns (hour of day, day of week) are encoded as sine/cosine
-        pairs so that midnight sits next to 23:00 in feature space.
+        pairs so that midnight sits next to 23:00 in feature space. The raw
+        cyclical columns are kept in the frame for bucket baselines; the model
+        input is governed by ``spec.names`` alone, which excludes them.
 
         Args:
             frame: Clean-table DataFrame.
 
         Returns:
-            A tuple of the engineered frame (features plus target) and the
-            :class:`FeatureSpec` describing it.
+            A tuple of the engineered frame (features, raw cyclical columns and
+            target) and the :class:`FeatureSpec` describing it.
 
         Raises:
             DataError: If a configured feature or the target column is missing,
@@ -282,7 +302,6 @@ class TaxiDataModule:
             engineered[f"{column}_sin"] = np.sin(radians)
             engineered[f"{column}_cos"] = np.cos(radians)
             feature_names.extend((f"{column}_sin", f"{column}_cos"))
-            engineered = engineered.drop(columns=[column])
 
         before = len(engineered)
         engineered = engineered.replace([np.inf, -np.inf], np.nan).dropna(
