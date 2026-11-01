@@ -23,11 +23,8 @@ train split only (`nyc_taxi.baseline`):
 
 | target | σ | bucket RMSE | linear (distance) RMSE | linear (all) RMSE | MLP RMSE | improvement vs linear (distance) | MLP R² |
 |---|---|---|---|---|---|---|---|
-| `fare_amount` (USD) | TODO | TODO | TODO | TODO | TODO | TODO | TODO |
-| `trip_duration_minutes` | TODO | TODO | TODO | TODO | TODO | TODO | TODO |
-
-<!-- TODO: fill from a fresh `python scripts/compare_targets.py` run. The previous table
-     is not reused: its baseline was computed in-sample on the full frame. -->
+| `fare_amount` (USD) | 10.49 | 10.431 | 3.164 | 3.150 | **3.060** | 3.3% | **0.9150** |
+| `trip_duration_minutes` | 8.81 | 8.742 | 5.269 | 5.211 | **4.195** | 20.4% | **0.7745** |
 
 `fare_amount` is the easier target of the two: the 2015 NYC meter is a published function
 of distance and waiting time, so most of the signal is already in `trip_distance`.
